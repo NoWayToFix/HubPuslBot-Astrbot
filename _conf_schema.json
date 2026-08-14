@@ -1,0 +1,40 @@
+{
+  "github_token": {
+    "description": "GitHub Personal Access Token",
+    "type": "string"
+  },
+  "github_repo": {
+    "description": "GitHub 上游仓库，格式：owner/repo",
+    "type": "string"
+  },
+  "base_branch": {
+    "description": "PR 目标分支",
+    "type": "string",
+    "default": "main"
+  },
+  "github_mirror": {
+    "description": "GitHub 镜像前缀（用于 pull 下载图片），例如 https://gh-proxy.org/，留空则直连",
+    "type": "string",
+    "default": ""
+  },
+  "allowed_groups": {
+    "description": "允许的群号列表，为空则允许所有群",
+    "type": "list",
+    "default": []
+  },
+  "admin_users": {
+    "description": "允许 push 的用户 ID，为空则允许所有人",
+    "type": "list",
+    "default": []
+  },
+  "image_dir": {
+    "description": "图片在仓库中的目录",
+    "type": "string",
+    "default": "images"
+  },
+  "max_file_size": {
+    "description": "最大允许图片大小（MB）",
+    "type": "int",
+    "default": 20
+  }
+}
