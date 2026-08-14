@@ -17,6 +17,18 @@ from astrbot.api.star import Context, Star, StarTools, register
 SUPPORTED_EXTENSIONS = re.compile(r"\.(png|jpe?g|webp|gif|bmp)$", re.IGNORECASE)
 
 
+def _extension_to_mime(ext: str) -> str:
+    _mime_map = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "gif": "image/gif",
+        "bmp": "image/bmp",
+    }
+    return _mime_map.get(ext, "image/png")
+
+
 @register(
     "hub-pusl",
     "Yukino_fox",
@@ -151,9 +163,20 @@ class HubPuslPlugin(Star):
         return "png"
 
     def _find_image_url(self, event: AstrMessageEvent) -> str | None:
+        # 检查当前消息中的图片
         for comp in event.message_obj.message:
             if isinstance(comp, Comp.Image):
                 return comp.url or comp.file
+
+        # 检查回复/引用消息中的图片
+        for comp in event.message_obj.message:
+            if isinstance(comp, Comp.Reply):
+                chain = getattr(comp, "chain", None) or getattr(comp, "message", None)
+                if chain:
+                    for reply_comp in chain:
+                        if isinstance(reply_comp, Comp.Image):
+                            return reply_comp.url or reply_comp.file
+
         return None
 
     @staticmethod
@@ -328,7 +351,7 @@ class HubPuslPlugin(Star):
         image_url = self._find_image_url(event)
         if not image_url:
             logger.warning(f"未找到图片，用户：{event.get_sender_id()}")
-            return "未检测到图片，请随命令发送图片。"
+            return "未检测到图片，请随命令发送图片或引用带图片的消息。"
 
         logger.debug(f"下载图片：{image_url}")
         async with self._http_session.get(image_url) as resp:
@@ -366,7 +389,9 @@ class HubPuslPlugin(Star):
         logger.info(f"push 成功，PR：{pr_url}")
         return f"图片已推送，PR：{pr_url}"
 
-    async def _pull_image(self, event: AstrMessageEvent, name: str | None = None) -> str:
+    async def _pull_image(
+        self, event: AstrMessageEvent, name: str | None = None
+    ) -> str:
         logger.debug(f"收到 pull 请求，用户：{event.get_sender_id()}")
 
         if not self._is_group_allowed(event):
@@ -403,25 +428,34 @@ class HubPuslPlugin(Star):
                 return f"未找到名为 `{target}` 的图片。"
             selected = match
             logger.info(f"指定拉取图片：{selected['name']}")
-            download_url = self._build_download_url(selected["path"])
-            return f"{selected['name']}\n{download_url}"
+        else:
+            # 随机选择
+            group_id = str(event.message_obj.group_id or event.get_sender_id())
+            history = self._load_history()
+            history_set = set(history.get(group_id, []))
+            candidates = [img for img in images if img["name"] not in history_set]
+            if not candidates:
+                logger.info(f"群 {group_id} 所有图片都已发送过，重置历史记录")
+                history[group_id] = []
+                candidates = images
+            selected = candidates[int(time.time() * 1000) % len(candidates)]
+            logger.info(f"随机选中图片：{selected['name']}")
+            history.setdefault(group_id, []).append(selected["name"])
+            self._save_history(history)
 
-        # 随机选择
-        group_id = str(event.message_obj.group_id or event.get_sender_id())
-        history = self._load_history()
-        history_set = set(history.get(group_id, []))
-        candidates = [img for img in images if img["name"] not in history_set]
-        if not candidates:
-            logger.info(f"群 {group_id} 所有图片都已发送过，重置历史记录")
-            history[group_id] = []
-            candidates = images
-        selected = candidates[int(time.time() * 1000) % len(candidates)]
-        logger.info(f"随机选中图片：{selected['name']}")
-        history.setdefault(group_id, []).append(selected["name"])
-        self._save_history(history)
-
+        # 下载图片并以 base64 内联返回（避免直连 GitHub raw 可能被屏蔽）
         download_url = self._build_download_url(selected["path"])
-        return f"{selected['name']}\n{download_url}"
+        logger.debug(f"下载图片：{download_url}")
+        async with self._http_session.get(download_url) as resp:
+            if resp.status != 200:
+                return f"图片下载失败：HTTP {resp.status}"
+            buffer = await resp.read()
+
+        ext = self._infer_extension(buffer)
+        mime = _extension_to_mime(ext)
+        b64 = base64.b64encode(buffer).decode("ascii")
+        data_uri = f"data:{mime};base64,{b64}"
+        return f"{selected['name']}\n{data_uri}"
 
     # ──── 命令处理器 ────────────────────────────────────────────────
 
