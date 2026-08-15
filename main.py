@@ -21,18 +21,6 @@ class HubPuslError(Exception):
 SUPPORTED_EXTENSIONS = re.compile(r"\.(png|jpe?g|webp|gif|bmp)$", re.IGNORECASE)
 
 
-def _extension_to_mime(ext: str) -> str:
-    _mime_map = {
-        "png": "image/png",
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "webp": "image/webp",
-        "gif": "image/gif",
-        "bmp": "image/bmp",
-    }
-    return _mime_map.get(ext, "image/png")
-
-
 @register(
     "hub-pusl",
     "Yukino_fox",
@@ -190,20 +178,19 @@ class HubPuslPlugin(Star):
             return "bmp"
         return "png"
 
-    def _find_image_url(self, event: AstrMessageEvent) -> str | None:
-        # 检查当前消息中的图片
+    @staticmethod
+    def _find_image_component(event: AstrMessageEvent) -> Comp.Image | None:
         for comp in event.message_obj.message:
             if isinstance(comp, Comp.Image):
-                return comp.url or comp.file
+                return comp
 
-        # 检查回复/引用消息中的图片
         for comp in event.message_obj.message:
             if isinstance(comp, Comp.Reply):
                 chain = getattr(comp, "chain", None) or getattr(comp, "message", None)
                 if chain:
                     for reply_comp in chain:
                         if isinstance(reply_comp, Comp.Image):
-                            return reply_comp.url or reply_comp.file
+                            return reply_comp
 
         return None
 
@@ -379,16 +366,14 @@ class HubPuslPlugin(Star):
         if not self._is_user_allowed(event):
             return "你没有权限执行 push 操作。"
 
-        image_url = self._find_image_url(event)
-        if not image_url:
+        img_comp = self._find_image_component(event)
+        if not img_comp:
             logger.warning(f"未找到图片，用户：{event.get_sender_id()}")
             return "未检测到图片，请随命令发送图片或引用带图片的消息。"
 
-        logger.debug(f"下载图片：{image_url}")
-        async with self._http_session.get(image_url) as resp:
-            if resp.status != 200:
-                return f"图片下载失败：HTTP {resp.status}"
-            buffer = await resp.read()
+        logger.debug(f"解析图片组件：file={img_comp.file!r}")
+        b64_str = await img_comp.convert_to_base64()
+        buffer = base64.b64decode(b64_str)
 
         ext = self._infer_extension(buffer)
         size_mb = len(buffer) / 1024 / 1024
@@ -422,11 +407,11 @@ class HubPuslPlugin(Star):
 
     async def _pull_image(
         self, event: AstrMessageEvent, name: str | None = None
-    ) -> str:
+    ) -> tuple[str, bytes | None]:
         logger.debug(f"收到 pull 请求，用户：{event.get_sender_id()}")
 
         if not self._is_group_allowed(event):
-            return "当前群不在允许列表中。"
+            return "当前群不在允许列表中。", None
 
         image_dir = self.config.get("image_dir", "images")
         branch = self.config.get("base_branch", "main")
@@ -436,7 +421,7 @@ class HubPuslPlugin(Star):
             items = await self._github_get(url)
         except HubPuslError as e:
             if "404" in str(e):
-                return "仓库中暂无图片。"
+                return "仓库中暂无图片。", None
             raise
 
         images = [
@@ -445,22 +430,20 @@ class HubPuslPlugin(Star):
             if item.get("type") == "file" and SUPPORTED_EXTENSIONS.search(item["name"])
         ]
         if not images:
-            return "仓库中暂无图片。"
+            return "仓库中暂无图片。", None
 
         if name:
             target = name.strip()
-            match = None
+            selected = None
             for img in images:
                 base = re.sub(r"\.[^.]+$", "", img["name"])
                 if base.lower() == target.lower():
-                    match = img
+                    selected = img
                     break
-            if not match:
-                return f"未找到名为 `{target}` 的图片。"
-            selected = match
+            if not selected:
+                return f"未找到名为 `{target}` 的图片。", None
             logger.info(f"指定拉取图片：{selected['name']}")
         else:
-            # 随机选择
             group_id = str(event.message_obj.group_id or event.get_sender_id())
             history = self._load_history()
             history_set = set(history.get(group_id, []))
@@ -474,19 +457,14 @@ class HubPuslPlugin(Star):
             history.setdefault(group_id, []).append(selected["name"])
             self._save_history(history)
 
-        # 下载图片并以 base64 内联返回（避免直连 GitHub raw 可能被屏蔽）
         download_url = self._build_download_url(selected["path"])
         logger.debug(f"下载图片：{download_url}")
         async with self._http_session.get(download_url) as resp:
             if resp.status != 200:
-                return f"图片下载失败：HTTP {resp.status}"
+                return f"图片下载失败：HTTP {resp.status}", None
             buffer = await resp.read()
 
-        ext = self._infer_extension(buffer)
-        mime = _extension_to_mime(ext)
-        b64 = base64.b64encode(buffer).decode("ascii")
-        data_uri = f"data:{mime};base64,{b64}"
-        return f"{selected['name']}\n{data_uri}"
+        return selected["name"], buffer
 
     # ──── 命令处理器 ────────────────────────────────────────────────
 
@@ -543,17 +521,16 @@ class HubPuslPlugin(Star):
         elif action == "pull":
             name = arg or None
             try:
-                result = await self._pull_image(event, name)
-                if "\n" in result:
-                    parts = result.split("\n", 1)
+                img_name, buffer = await self._pull_image(event, name)
+                if buffer is None:
+                    yield event.plain_result(img_name)
+                else:
                     yield event.chain_result(
                         [
-                            Comp.Plain(f"{parts[0]}\n"),
-                            Comp.Image.fromURL(parts[1]),
+                            Comp.Plain(img_name),
+                            Comp.Image.fromBytes(buffer),
                         ]
                     )
-                else:
-                    yield event.plain_result(result)
             except HubPuslError as e:
                 err_msg = str(e)
                 logger.error(f"pull 命令执行失败：{err_msg}")
