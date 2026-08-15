@@ -521,7 +521,7 @@ class HubPuslPlugin(Star):
 
         prefix = match.group(1).strip()
         action = match.group(2)
-        arg = match.group(3).strip()
+        arg = re.sub(r"\[MSG_ID:[^\]]*\]", "", match.group(3)).strip()
 
         if prefix != self._get_prefix():
             return
