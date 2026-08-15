@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import asyncio
 import base64
 import json
@@ -13,6 +12,11 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.platform import MessageType
 from astrbot.api.star import Context, Star, StarTools, register
+
+
+class HubPuslError(Exception):
+    """HubPusl 插件自定义异常"""
+
 
 SUPPORTED_EXTENSIONS = re.compile(r"\.(png|jpe?g|webp|gif|bmp)$", re.IGNORECASE)
 
@@ -80,7 +84,7 @@ class HubPuslPlugin(Star):
                     )
                 else:
                     logger.error(f"获取 GitHub 用户信息失败：HTTP {resp.status}")
-        except Exception as e:
+        except (aiohttp.ClientError, OSError) as e:
             logger.error(f"获取 GitHub 用户信息失败：{e}")
 
     async def terminate(self):
@@ -191,7 +195,7 @@ class HubPuslPlugin(Star):
         try:
             with open(self._history_path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             return {}
 
     def _save_history(self, history: dict[str, list[str]]):
@@ -204,8 +208,11 @@ class HubPuslPlugin(Star):
     async def _github_get(self, url: str) -> Any:
         async with self._http_session.get(url, headers=self._github_headers) as resp:
             if resp.status >= 400:
-                raise Exception(f"GitHub GET {url} 返回 {resp.status}")
-            return await resp.json()
+                raise HubPuslError(f"GitHub GET {url} 返回 {resp.status}")
+            data = await resp.json()
+            if data is None:
+                raise HubPuslError(f"GitHub GET {url} 返回空响应")
+            return data
 
     async def _github_post(self, url: str, data: dict | None = None) -> Any:
         async with self._http_session.post(
@@ -213,7 +220,7 @@ class HubPuslPlugin(Star):
         ) as resp:
             if resp.status >= 400:
                 text = await resp.text()
-                raise Exception(f"GitHub POST {url} 返回 {resp.status}: {text}")
+                raise HubPuslError(f"GitHub POST {url} 返回 {resp.status}: {text}")
             return await resp.json()
 
     async def _github_patch(self, url: str, data: dict) -> Any:
@@ -222,7 +229,7 @@ class HubPuslPlugin(Star):
         ) as resp:
             if resp.status >= 400:
                 text = await resp.text()
-                raise Exception(f"GitHub PATCH {url} 返回 {resp.status}: {text}")
+                raise HubPuslError(f"GitHub PATCH {url} 返回 {resp.status}: {text}")
             return await resp.json()
 
     async def _github_put(self, url: str, data: dict) -> Any:
@@ -231,7 +238,7 @@ class HubPuslPlugin(Star):
         ) as resp:
             if resp.status >= 400:
                 text = await resp.text()
-                raise Exception(f"GitHub PUT {url} 返回 {resp.status}: {text}")
+                raise HubPuslError(f"GitHub PUT {url} 返回 {resp.status}: {text}")
             return await resp.json()
 
     async def _check_file_exists(self, path: str) -> bool:
@@ -241,12 +248,12 @@ class HubPuslPlugin(Star):
                 return False
             if resp.status >= 400:
                 text = await resp.text()
-                raise Exception(f"检查文件存在失败：HTTP {resp.status}: {text}")
+                raise HubPuslError(f"检查文件存在失败：HTTP {resp.status}: {text}")
             return True
 
     async def _ensure_fork(self) -> str:
         if not self._fork_owner:
-            raise Exception("Token 用户信息未获取，请检查 Token 配置后重启插件。")
+            raise HubPuslError("Token 用户信息未获取，请检查 Token 配置后重启插件。")
 
         try:
             repo_info = await self._github_get(self._fork_api_base)
@@ -260,11 +267,11 @@ class HubPuslPlugin(Star):
                 repo_info.get("parent", {}).get("full_name")
                 != f"{self._upstream_owner}/{self._upstream_repo}"
             ):
-                raise Exception(
+                raise HubPuslError(
                     f"用户 {self._fork_owner} 下已存在 {self._upstream_repo} 仓库"
                     f"但不是上游的 fork，请手动处理。"
                 )
-        except Exception as e:
+        except HubPuslError as e:
             if "404" not in str(e) and "Fork" not in str(e):
                 raise
 
@@ -286,9 +293,9 @@ class HubPuslPlugin(Star):
                         f"默认分支：{repo_info.get('default_branch', 'main')}"
                     )
                     return repo_info.get("default_branch", "main")
-            except Exception:
+            except HubPuslError:
                 logger.debug("Fork 尚未就绪，继续等待...")
-        raise Exception("Fork 创建超时，请稍后重试。")
+        raise HubPuslError("Fork 创建超时，请稍后重试。")
 
     async def _sync_fork_branch(self, fork_default_branch: str) -> str:
         upstream_ref = await self._github_get(
@@ -304,7 +311,7 @@ class HubPuslPlugin(Star):
                 {"sha": upstream_sha, "force": True},
             )
             logger.debug(f"Fork 分支 {fork_default_branch} 已同步")
-        except Exception as e:
+        except HubPuslError as e:
             logger.warning(f"同步 fork 分支失败，继续使用当前状态：{e}")
 
         return upstream_sha
@@ -338,7 +345,7 @@ class HubPuslPlugin(Star):
         )
         return resp["html_url"]
 
-    # ──── 核心逻辑 ──────────────────────────────────────────────────
+    # ─── 核心逻辑 ──────────────────────────────────────────────────
 
     async def _push_image(self, event: AstrMessageEvent, title: str) -> str:
         logger.debug(f"收到 push 请求，标题：{title}，用户：{event.get_sender_id()}")
@@ -403,7 +410,7 @@ class HubPuslPlugin(Star):
 
         try:
             items = await self._github_get(url)
-        except Exception as e:
+        except HubPuslError as e:
             if "404" in str(e):
                 return "仓库中暂无图片。"
             raise
@@ -470,7 +477,7 @@ class HubPuslPlugin(Star):
         try:
             result = await self._push_image(event, title)
             yield event.plain_result(result)
-        except Exception as e:
+        except HubPuslError as e:
             logger.error(f"push 命令执行失败：{e}")
             yield event.plain_result(f"推送失败：{e}")
 
@@ -492,6 +499,6 @@ class HubPuslPlugin(Star):
                 )
             else:
                 yield event.plain_result(result)
-        except Exception as e:
+        except HubPuslError as e:
             logger.error(f"pull 命令执行失败：{e}")
             yield event.plain_result(f"拉取失败：{e}")
