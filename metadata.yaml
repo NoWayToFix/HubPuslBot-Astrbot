@@ -1,6 +1,6 @@
 name: hub-pusl
 display_name: HubPusl
 desc: 通过 GitHub API 在群内推送图片并创建 PR，或随机拉取图片到群内，无需本地 clone 仓库。
-version: v1.0.0
+version: v1.0.2
 author: Yukino_fox
 repo: https://github.com/NoWayToFix/HubPuslBot
