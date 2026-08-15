@@ -466,39 +466,45 @@ class HubPuslPlugin(Star):
 
     # ──── 命令处理器 ────────────────────────────────────────────────
 
-    @filter.command("nwtf-push")
-    async def push_command(self, event: AstrMessageEvent):
-        """推送图片到 Hub 仓库并创建 PR"""
-        title = event.message_str.strip()
-        if not title:
-            yield event.plain_result("请提供图片标题，例如：/nwtf-push 可爱小猫")
+    def _get_prefix(self) -> str:
+        return self.config.get("command_prefix", "nwtf")
+
+    @filter.regex(r"^([^-]+)-(push|pull)\s*(.*)$")
+    async def command_handler(self, event: AstrMessageEvent, regex_result: re.Match):
+        """处理 {前缀}-push / {前缀}-pull 命令"""
+        prefix = regex_result.group(1).strip()
+        action = regex_result.group(2)
+        arg = regex_result.group(3).strip()
+
+        if prefix != self._get_prefix():
             return
 
-        try:
-            result = await self._push_image(event, title)
-            yield event.plain_result(result)
-        except HubPuslError as e:
-            logger.error(f"push 命令执行失败：{e}")
-            yield event.plain_result(f"推送失败：{e}")
-
-    @filter.command("nwtf-pull")
-    async def pull_command(self, event: AstrMessageEvent):
-        """从 Hub 仓库拉取图片（不指定名字则随机）"""
-        name = event.message_str.strip() or None
-
-        try:
-            result = await self._pull_image(event, name)
-            # result 是 "文件名\n图片URL" 格式
-            if "\n" in result:
-                parts = result.split("\n", 1)
-                yield event.chain_result(
-                    [
-                        Comp.Plain(f"{parts[0]}\n"),
-                        Comp.Image.fromURL(parts[1]),
-                    ]
+        if action == "push":
+            if not arg:
+                yield event.plain_result(
+                    f"请提供图片标题，例如：/{prefix}-push 可爱小猫"
                 )
-            else:
+                return
+            try:
+                result = await self._push_image(event, arg)
                 yield event.plain_result(result)
-        except HubPuslError as e:
-            logger.error(f"pull 命令执行失败：{e}")
-            yield event.plain_result(f"拉取失败：{e}")
+            except HubPuslError as e:
+                logger.error(f"push 命令执行失败：{e}")
+                yield event.plain_result(f"推送失败：{e}")
+        elif action == "pull":
+            name = arg or None
+            try:
+                result = await self._pull_image(event, name)
+                if "\n" in result:
+                    parts = result.split("\n", 1)
+                    yield event.chain_result(
+                        [
+                            Comp.Plain(f"{parts[0]}\n"),
+                            Comp.Image.fromURL(parts[1]),
+                        ]
+                    )
+                else:
+                    yield event.plain_result(result)
+            except HubPuslError as e:
+                logger.error(f"pull 命令执行失败：{e}")
+                yield event.plain_result(f"拉取失败：{e}")
