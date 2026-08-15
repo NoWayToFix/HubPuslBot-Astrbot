@@ -512,11 +512,16 @@ class HubPuslPlugin(Star):
         return "提示：请检查插件配置或查看日志获取更多信息"
 
     @filter.regex(r"^([^-]+)-(push|pull)\s*(.*)$")
-    async def command_handler(self, event: AstrMessageEvent, regex_result: re.Match):
+    async def command_handler(self, event: AstrMessageEvent):
         """处理 {前缀}-push / {前缀}-pull 命令"""
-        prefix = regex_result.group(1).strip()
-        action = regex_result.group(2)
-        arg = regex_result.group(3).strip()
+        msg = event.message_str.strip()
+        match = re.match(r"^([^-]+)-(push|pull)\s*(.*)$", msg)
+        if not match:
+            return
+
+        prefix = match.group(1).strip()
+        action = match.group(2)
+        arg = match.group(3).strip()
 
         if prefix != self._get_prefix():
             return
