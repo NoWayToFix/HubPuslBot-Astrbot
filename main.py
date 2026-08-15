@@ -77,15 +77,39 @@ class HubPuslPlugin(Star):
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
+                    if data is None:
+                        logger.error(
+                            "获取 GitHub 用户信息失败：返回空响应，"
+                            "请检查 Token 是否有效或 GitHub API 是否正常"
+                        )
+                        return
+                    if "login" not in data:
+                        logger.error(
+                            f"获取 GitHub 用户信息失败：响应中缺少 login 字段，"
+                            f"返回内容：{data}，请检查 Token 权限"
+                        )
+                        return
                     self._fork_owner = data["login"]
                     logger.info(
                         f"插件已加载，上游仓库：{repo}，Token 用户：{self._fork_owner}，"
                         f"目标分支：{self.config.get('base_branch', 'main')}"
                     )
+                elif resp.status == 401:
+                    logger.error(
+                        "获取 GitHub 用户信息失败：HTTP 401，"
+                        "Token 无效或已过期，请检查 github_token 配置"
+                    )
+                elif resp.status == 403:
+                    logger.error(
+                        "获取 GitHub 用户信息失败：HTTP 403，"
+                        "Token 权限不足或触发速率限制，请检查 Token 权限或稍后重试"
+                    )
                 else:
                     logger.error(f"获取 GitHub 用户信息失败：HTTP {resp.status}")
         except (aiohttp.ClientError, OSError) as e:
-            logger.error(f"获取 GitHub 用户信息失败：{e}")
+            logger.error(
+                f"获取 GitHub 用户信息失败：网络错误 {e}，" "请检查网络连接或代理配置"
+            )
 
     async def terminate(self):
         if self._http_session:
@@ -469,6 +493,24 @@ class HubPuslPlugin(Star):
     def _get_prefix(self) -> str:
         return self.config.get("command_prefix", "nwtf")
 
+    @staticmethod
+    def _get_error_hint(err_msg: str) -> str:
+        if "Token" in err_msg or "token" in err_msg:
+            return "提示：请检查 github_token 是否配置正确且未过期"
+        if "401" in err_msg:
+            return "提示：Token 无效或已过期，请重新生成 github_token"
+        if "403" in err_msg or "速率" in err_msg:
+            return "提示：可能触发了 GitHub 速率限制，请稍后重试"
+        if "404" in err_msg:
+            return "提示：请检查 github_repo 配置是否正确"
+        if "空响应" in err_msg:
+            return "提示：GitHub API 返回异常，请检查网络或稍后重试"
+        if "Fork" in err_msg:
+            return "提示：Fork 操作异常，请检查上游仓库是否存在且可访问"
+        if "超时" in err_msg:
+            return "提示：操作超时，请检查网络连接后重试"
+        return "提示：请检查插件配置或查看日志获取更多信息"
+
     @filter.regex(r"^([^-]+)-(push|pull)\s*(.*)$")
     async def command_handler(self, event: AstrMessageEvent, regex_result: re.Match):
         """处理 {前缀}-push / {前缀}-pull 命令"""
@@ -489,8 +531,10 @@ class HubPuslPlugin(Star):
                 result = await self._push_image(event, arg)
                 yield event.plain_result(result)
             except HubPuslError as e:
-                logger.error(f"push 命令执行失败：{e}")
-                yield event.plain_result(f"推送失败：{e}")
+                err_msg = str(e)
+                logger.error(f"push 命令执行失败：{err_msg}")
+                hint = self._get_error_hint(err_msg)
+                yield event.plain_result(f"推送失败：{err_msg}\n{hint}")
         elif action == "pull":
             name = arg or None
             try:
@@ -506,5 +550,7 @@ class HubPuslPlugin(Star):
                 else:
                     yield event.plain_result(result)
             except HubPuslError as e:
-                logger.error(f"pull 命令执行失败：{e}")
-                yield event.plain_result(f"拉取失败：{e}")
+                err_msg = str(e)
+                logger.error(f"pull 命令执行失败：{err_msg}")
+                hint = self._get_error_hint(err_msg)
+                yield event.plain_result(f"拉取失败：{err_msg}\n{hint}")
