@@ -36,5 +36,10 @@
     "description": "最大允许图片大小（MB）",
     "type": "int",
     "default": 20
+  },
+  "command_prefix": {
+    "description": "命令前缀，命令格式为 {前缀}-push / {前缀}-pull",
+    "type": "string",
+    "default": "nwtf"
   }
 }
