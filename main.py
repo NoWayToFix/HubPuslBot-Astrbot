@@ -344,6 +344,22 @@ class HubPuslPlugin(Star):
             },
         )
 
+    async def _create_file_direct(self, path: str, buffer: bytes) -> str:
+        branch = self.config.get("base_branch", "main")
+        url = f"{self._upstream_api_base}/contents/{path}"
+        await self._github_put(
+            url,
+            {
+                "message": f"[HubPusl] add image {path.split('/')[-1]}",
+                "content": base64.b64encode(buffer).decode("ascii"),
+                "branch": branch,
+            },
+        )
+        return (
+            f"https://github.com/{self._upstream_owner}/"
+            f"{self._upstream_repo}/blob/{branch}/{path}"
+        )
+
     async def _create_pr(self, title: str, branch: str) -> str:
         resp = await self._github_post(
             f"{self._upstream_api_base}/pulls",
@@ -394,6 +410,12 @@ class HubPuslPlugin(Star):
         if await self._check_file_exists(path):
             logger.warning(f"文件已存在：{filename}")
             return f"文件 `{filename}` 已存在，请更换标题后再试。"
+
+        if self.config.get("direct_push", False):
+            logger.debug("direct_push 模式：直接 commit 到上游仓库")
+            file_url = await self._create_file_direct(path, buffer)
+            logger.info(f"direct push 成功：{file_url}")
+            return f"图片已直接提交：{file_url}"
 
         fork_default_branch = await self._ensure_fork()
         latest_sha = await self._sync_fork_branch(fork_default_branch)

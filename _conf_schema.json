@@ -41,5 +41,10 @@
     "description": "命令前缀，命令格式为 {前缀}-push / {前缀}-pull",
     "type": "string",
     "default": "nwtf"
+  },
+  "direct_push": {
+    "description": "直接向 github_repo 仓库提交（需要 Token 对该仓库有写权限）。开启后跳过 fork + PR 流程，图片直接 commit 到 base_branch",
+    "type": "bool",
+    "default": false
   }
 }
