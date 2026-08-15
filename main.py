@@ -126,15 +126,14 @@ class HubPuslPlugin(Star):
     def _build_download_url(self, path: str) -> str:
         mirror = self.config.get("github_mirror", "")
         branch = self.config.get("base_branch", "main")
-        if mirror:
-            return (
-                f"{mirror}https://github.com/"
-                f"{self._upstream_owner}/{self._upstream_repo}/blob/{branch}/{path}"
-            )
-        return (
+        raw_url = (
             f"https://raw.githubusercontent.com/"
             f"{self._upstream_owner}/{self._upstream_repo}/{branch}/{path}"
         )
+        if mirror:
+            mirror = mirror.rstrip("/")
+            return f"{mirror}/{raw_url}"
+        return raw_url
 
     # ──── 权限检查 ──────────────────────────────────────────────────
 
